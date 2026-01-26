@@ -71,6 +71,11 @@ resource "google_project_iam_audit_config" "secretmanager" {
   audit_log_config {
     log_type = "ADMIN_READ"
   }
+
+  # DATA_READ captures: AccessSecretVersion (reading secret values)
+  audit_log_config {
+    log_type = "DATA_READ"
+  }
 }
 
 # =============================================================================

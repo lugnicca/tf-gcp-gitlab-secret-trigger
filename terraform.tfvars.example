@@ -1,50 +1,33 @@
 # =============================================================================
-# Configuration - Customize these values
+# Required Configuration
 # =============================================================================
 
-# Your GCP project ID
 project_id = "MY-PROJECT-ID"
-
-# GCP region (europe-west1 = Belgium, europe-west9 = Paris, us-central1 = Iowa)
-region = "europe-west1"
 
 # =============================================================================
 # GitLab Configuration
 # =============================================================================
 
-# Your GitLab Pipeline Trigger Token
-# Create one at: Settings > CI/CD > Pipeline trigger tokens
 gitlab_trigger_token = "glptt-xxxxxxxxxxxxxxxx"
-
-# Your GitLab project ID (visible in Settings > General)
-gitlab_project_id = "12345678"
-
-# GitLab URL (gitlab.com or your self-hosted instance)
-gitlab_url = "https://gitlab.com"
-
-# Branch to trigger
-gitlab_ref = "main"
+gitlab_project_id    = "12345678"
+gitlab_url           = "https://gitlab.com"
+gitlab_ref           = "main"
 
 # =============================================================================
 # Label Filtering
 # =============================================================================
 
-# Only secrets with ALL these labels will trigger the pipeline
-# Leave empty {} to trigger for all secrets
 required_labels = {
-  "trigger-gitlab" = "true"
+  "application" = "n8n"
 }
 
 # =============================================================================
 # Event Types
 # =============================================================================
 
-# Trigger pipeline when a new secret is created
-trigger_on_create = true
-
-# Trigger pipeline when a new version is added to a secret
-trigger_on_update = true
-
-# Trigger pipeline when a secret is deleted
-# Warning: Label filtering cannot be verified for deleted secrets
-trigger_on_delete = false
+event_types = {
+  secret_version_add     = true
+  secret_version_enable  = true
+  secret_version_disable = true
+  secret_version_destroy = true
+}

@@ -10,7 +10,17 @@ variable "project_id" {
 variable "region" {
   description = "GCP region for resources"
   type        = string
-  default     = "us-central1"
+  default     = "europe-west1"
+}
+
+# =============================================================================
+# Git Source Configuration
+# =============================================================================
+
+variable "source_git_url" {
+  description = "HTTPS URL of the Git repository containing the Cloud Function source code"
+  type        = string
+  default     = "https://github.com/lugnicca/secret-gitlab-trigger-test.git"
 }
 
 # =============================================================================
@@ -23,143 +33,67 @@ variable "function_name" {
   default     = "secret-gitlab-trigger"
 }
 
-variable "function_description" {
-  description = "Description of the Cloud Function"
-  type        = string
-  default     = "Triggers GitLab pipeline on Secret Manager events"
-}
-
-variable "function_memory" {
-  description = "Memory allocation for the function in MB"
-  type        = number
-  default     = 256
-}
-
-variable "function_timeout" {
-  description = "Function timeout in seconds"
-  type        = number
-  default     = 60
-}
-
-variable "function_min_instances" {
-  description = "Minimum number of function instances"
-  type        = number
-  default     = 0
-}
-
-variable "function_max_instances" {
-  description = "Maximum number of function instances"
-  type        = number
-  default     = 10
-}
-
-# =============================================================================
-# Label Filtering (applied in function code)
-# =============================================================================
-
-variable "required_labels" {
-  description = "Map of labels that secrets must have to trigger pipeline. Only secrets with ALL these labels will trigger the pipeline."
-  type        = map(string)
-  default     = {}
-}
-
-# =============================================================================
-# Event Types to Trigger On
-# =============================================================================
-
-variable "trigger_on_create" {
-  description = "Trigger pipeline when secrets are created"
-  type        = bool
-  default     = true
-}
-
-variable "trigger_on_update" {
-  description = "Trigger pipeline when secret versions are added"
-  type        = bool
-  default     = true
-}
-
-variable "trigger_on_delete" {
-  description = "Trigger pipeline when secrets are deleted"
-  type        = bool
-  default     = false
-}
-
 # =============================================================================
 # GitLab Configuration
 # =============================================================================
 
 variable "gitlab_url" {
-  description = "GitLab instance URL (e.g., https://gitlab.com or https://gitlab.yourcompany.com)"
+  description = "GitLab instance URL"
   type        = string
   default     = "https://gitlab.com"
 }
 
-variable "gitlab_ref" {
-  description = "Git ref (branch/tag) to trigger pipeline on"
+variable "gitlab_project_id" {
+  description = "GitLab project path or numeric ID to trigger"
   type        = string
-  default     = "main"
+  default     = ""
 }
 
-# =============================================================================
-# GitLab Credentials - Secret Management
-# =============================================================================
-
-variable "create_gitlab_secrets" {
-  description = "Whether to create Secret Manager secrets for GitLab credentials. If false, you must provide existing secret IDs."
-  type        = bool
-  default     = true
-}
-
-# Used when create_gitlab_secrets = true
 variable "gitlab_trigger_token" {
-  description = "GitLab Pipeline Trigger Token (only used if create_gitlab_secrets = true)"
+  description = "GitLab pipeline trigger token"
   type        = string
   sensitive   = true
   default     = ""
 }
 
-variable "gitlab_project_id" {
-  description = "GitLab Project ID (only used if create_gitlab_secrets = true)"
+variable "gitlab_ref" {
+  description = "Git reference (branch/tag) to trigger"
   type        = string
-  default     = ""
-}
-
-# Used when create_gitlab_secrets = false
-variable "existing_gitlab_token_secret_id" {
-  description = "Existing Secret Manager secret ID for GitLab trigger token (only used if create_gitlab_secrets = false)"
-  type        = string
-  default     = ""
-}
-
-variable "existing_gitlab_project_id_secret_id" {
-  description = "Existing Secret Manager secret ID for GitLab project ID (only used if create_gitlab_secrets = false)"
-  type        = string
-  default     = ""
+  default     = "main"
 }
 
 # =============================================================================
-# Service Account Configuration
+# Event Configuration
 # =============================================================================
 
-variable "create_service_account" {
-  description = "Whether to create a new service account or use an existing one"
-  type        = bool
-  default     = true
+variable "event_types" {
+  description = "Which Secret Manager events should trigger the GitLab pipeline"
+  type = object({
+    secret_version_add     = bool
+    secret_version_enable  = bool
+    secret_version_disable = bool
+    secret_version_destroy = bool
+  })
+  default = {
+    secret_version_add     = true
+    secret_version_enable  = true
+    secret_version_disable = true
+    secret_version_destroy = true
+  }
 }
 
-variable "service_account_email" {
-  description = "Existing service account email (only used if create_service_account = false)"
-  type        = string
-  default     = ""
+variable "required_labels" {
+  description = "Labels that must be present on secrets to trigger the pipeline"
+  type        = map(string)
+  default     = {}
 }
 
 # =============================================================================
-# Labels for resources created by this module
+# Resource Labels
 # =============================================================================
 
 variable "labels" {
-  description = "Labels to apply to all resources created by this module"
+  description = "Labels to apply to all resources"
   type        = map(string)
   default     = {}
 }

@@ -2,146 +2,157 @@
 # Enable Required GCP APIs
 # =============================================================================
 
-resource "google_project_service" "cloudfunctions" {
-  project            = var.project_id
-  service            = "cloudfunctions.googleapis.com"
-  disable_on_destroy = false
-}
+resource "google_project_service" "apis" {
+  for_each = toset([
+    "cloudfunctions.googleapis.com",
+    "cloudbuild.googleapis.com",
+    "eventarc.googleapis.com",
+    "run.googleapis.com",
+    "secretmanager.googleapis.com",
+    "logging.googleapis.com",
+    "storage.googleapis.com",
+  ])
 
-resource "google_project_service" "cloudbuild" {
-  project            = var.project_id
-  service            = "cloudbuild.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "eventarc" {
-  project            = var.project_id
-  service            = "eventarc.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "run" {
-  project            = var.project_id
-  service            = "run.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "secretmanager" {
-  project            = var.project_id
-  service            = "secretmanager.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "logging" {
-  project            = var.project_id
-  service            = "logging.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "storage" {
-  project            = var.project_id
-  service            = "storage.googleapis.com"
-  disable_on_destroy = false
-}
-
-resource "google_project_service" "artifactregistry" {
-  project            = var.project_id
-  service            = "artifactregistry.googleapis.com"
-  disable_on_destroy = false
+  project                    = var.project_id
+  service                    = each.value
+  disable_dependent_services = true
 }
 
 # =============================================================================
 # Enable Cloud Audit Logs for Secret Manager
-# =============================================================================
-# CRITICAL: This is required for Eventarc triggers to work.
-# Without this, Secret Manager operations don't generate audit log events,
-# and the Cloud Function will never be triggered.
 # =============================================================================
 
 resource "google_project_iam_audit_config" "secretmanager" {
   project = var.project_id
   service = "secretmanager.googleapis.com"
 
-  # DATA_WRITE captures: CreateSecret, AddSecretVersion, DeleteSecret
   audit_log_config {
     log_type = "DATA_WRITE"
   }
 
-  # ADMIN_READ captures metadata access (needed for some edge cases)
   audit_log_config {
     log_type = "ADMIN_READ"
   }
 
-  # DATA_READ captures: AccessSecretVersion (reading secret values)
   audit_log_config {
     log_type = "DATA_READ"
   }
 }
 
 # =============================================================================
-# Cloud Storage for Function Source Code
+# GIT SOURCE - FETCH LATEST TAG AND SOURCE CODE
 # =============================================================================
 
-resource "random_id" "bucket_suffix" {
-  byte_length = 4
+data "external" "fetch_source" {
+  program = ["bash", "-c", <<-EOF
+    set -e
+    TAG=$(git ls-remote --tags --sort=-v:refname "${var.source_git_url}" "v*" | head -1 | sed 's|.*refs/tags/||')
+    [ -z "$TAG" ] && echo '{"error":"no tags"}' >&2 && exit 1
+    DIR="${path.module}/.terraform/git-source"
+    rm -rf "$DIR" && git clone -q --depth 1 --branch "$TAG" "${var.source_git_url}" "$DIR"
+    COMMIT=$(git -C "$DIR" rev-parse --short HEAD)
+    echo "{\"tag\":\"$TAG\",\"commit\":\"$COMMIT\"}"
+  EOF
+  ]
+}
+
+# =============================================================================
+# Local Values
+# =============================================================================
+
+locals {
+  source_git_tag = data.external.fetch_source.result.tag
+
+  event_method_mapping = {
+    secret_version_add     = "google.cloud.secretmanager.v1.SecretManagerService.AddSecretVersion"
+    secret_version_enable  = "google.cloud.secretmanager.v1.SecretManagerService.EnableSecretVersion"
+    secret_version_disable = "google.cloud.secretmanager.v1.SecretManagerService.DisableSecretVersion"
+    secret_version_destroy = "google.cloud.secretmanager.v1.SecretManagerService.DestroySecretVersion"
+  }
+
+  enabled_events = {
+    for event_type, method in local.event_method_mapping :
+    event_type => method if lookup(var.event_types, event_type, false)
+  }
+
+  common_labels = merge(
+    {
+      managed-by = "terraform"
+      module     = "secret-gitlab-trigger"
+    },
+    var.labels
+  )
+}
+
+# =============================================================================
+# Function Source - From Git Repository
+# =============================================================================
+
+data "archive_file" "function_source" {
+  type        = "zip"
+  output_path = "${path.module}/.terraform/function-source.zip"
+
+  source {
+    content  = file("${path.module}/.terraform/git-source/main.py")
+    filename = "main.py"
+  }
+
+  source {
+    content  = file("${path.module}/.terraform/git-source/src/secret_gitlab_trigger/__init__.py")
+    filename = "secret_gitlab_trigger/__init__.py"
+  }
+
+  source {
+    content  = file("${path.module}/.terraform/git-source/requirements.txt")
+    filename = "requirements.txt"
+  }
+
+  depends_on = [data.external.fetch_source]
 }
 
 resource "google_storage_bucket" "function_source" {
-  project                     = var.project_id
-  name                        = "${var.project_id}-${var.function_name}-src-${random_id.bucket_suffix.hex}"
-  location                    = var.region
+  project  = var.project_id
+  name     = "${var.project_id}-${var.function_name}-source"
+  location = var.region
+
+  labels                      = local.common_labels
   uniform_bucket_level_access = true
-  force_destroy               = true
 
   versioning {
     enabled = true
   }
 
-  labels = merge(var.labels, {
-    managed-by = "terraform"
-    purpose    = "cloud-function-source"
-  })
+  lifecycle_rule {
+    condition {
+      num_newer_versions = 3
+    }
+    action {
+      type = "Delete"
+    }
+  }
 
-  depends_on = [google_project_service.storage]
-}
-
-# =============================================================================
-# Archive and Upload Function Source
-# =============================================================================
-
-data "archive_file" "function_source" {
-  type        = "zip"
-  source_dir  = "${path.module}/function-source"
-  output_path = "${path.module}/.terraform/tmp/function-source.zip"
+  depends_on = [google_project_service.apis]
 }
 
 resource "google_storage_bucket_object" "function_source" {
-  name   = "function-source-${data.archive_file.function_source.output_md5}.zip"
+  name   = "function-source-${local.source_git_tag}.zip"
   bucket = google_storage_bucket.function_source.name
   source = data.archive_file.function_source.output_path
 }
 
 # =============================================================================
-# Local values for function configuration
+# Cloud Function Gen2
 # =============================================================================
 
-locals {
-  # Convert required_labels map to comma-separated string for env var
-  required_labels_str = join(",", [for k, v in var.required_labels : "${k}=${v}"])
-}
+resource "google_cloudfunctions2_function" "trigger" {
+  project  = var.project_id
+  name     = var.function_name
+  location = var.region
 
-# =============================================================================
-# Cloud Function Gen 2
-# =============================================================================
-
-resource "google_cloudfunctions2_function" "main" {
-  project     = var.project_id
-  name        = var.function_name
-  location    = var.region
-  description = var.function_description
+  labels = local.common_labels
 
   build_config {
-    runtime     = "python311"
+    runtime     = "python312"
     entry_point = "handle_secret_event"
 
     source {
@@ -153,50 +164,28 @@ resource "google_cloudfunctions2_function" "main" {
   }
 
   service_config {
-    min_instance_count             = var.function_min_instances
-    max_instance_count             = var.function_max_instances
-    available_memory               = "${var.function_memory}M"
-    timeout_seconds                = var.function_timeout
-    service_account_email          = local.service_account_email
-    ingress_settings               = "ALLOW_INTERNAL_ONLY"
-    all_traffic_on_latest_revision = true
+    min_instance_count = 0
+    max_instance_count = 10
+    timeout_seconds    = 60
+    available_memory   = "256Mi"
+    available_cpu      = "1"
+
+    service_account_email = google_service_account.function.email
 
     environment_variables = {
-      GCP_PROJECT_ID  = var.project_id
-      GITLAB_URL      = var.gitlab_url
-      GITLAB_REF      = var.gitlab_ref
-      REQUIRED_LABELS = local.required_labels_str
-    }
-
-    secret_environment_variables {
-      key        = "GITLAB_TRIGGER_TOKEN"
-      project_id = var.project_id
-      secret     = local.gitlab_token_secret_id
-      version    = "latest"
-    }
-
-    secret_environment_variables {
-      key        = "GITLAB_PROJECT_ID"
-      project_id = var.project_id
-      secret     = local.gitlab_project_id_secret_id
-      version    = "latest"
+      GITLAB_URL           = var.gitlab_url
+      GITLAB_PROJECT_ID    = var.gitlab_project_id
+      GITLAB_REF           = var.gitlab_ref
+      GITLAB_TRIGGER_TOKEN = var.gitlab_trigger_token
+      REQUIRED_LABELS      = jsonencode(var.required_labels)
+      GCP_PROJECT_ID       = var.project_id
     }
   }
 
-  labels = merge(var.labels, {
-    managed-by = "terraform"
-  })
-
   depends_on = [
-    google_project_service.cloudfunctions,
-    google_project_service.cloudbuild,
-    google_project_service.run,
-    google_project_service.artifactregistry,
-    google_project_iam_member.eventarc_receiver,
-    google_project_iam_member.run_invoker,
+    google_project_service.apis,
     google_project_iam_member.secret_accessor,
     google_project_iam_member.secret_viewer,
-    google_secret_manager_secret_version.gitlab_token,
-    google_secret_manager_secret_version.gitlab_project_id,
+    google_project_iam_member.eventarc_event_receiver,
   ]
 }

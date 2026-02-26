@@ -19,7 +19,7 @@ output "service_account_email" {
 
 output "eventarc_trigger_names" {
   description = "Names of the created Eventarc triggers"
-  value       = { for k, v in google_eventarc_trigger.secret_event : k => v.name }
+  value       = { for k, v in google_eventarc_trigger.secret_event : k => element(split("/", v.name), length(split("/", v.name)) - 1) }
 }
 
 output "enabled_event_types" {

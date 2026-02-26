@@ -7,6 +7,7 @@ resource "google_project_service" "apis" {
     "cloudfunctions.googleapis.com",
     "cloudbuild.googleapis.com",
     "eventarc.googleapis.com",
+    "eventarcpublishing.googleapis.com",
     "run.googleapis.com",
     "secretmanager.googleapis.com",
     "logging.googleapis.com",

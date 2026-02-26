@@ -55,3 +55,21 @@ resource "google_project_iam_member" "eventarc_service_agent" {
   role    = "roles/eventarc.serviceAgent"
   member  = "serviceAccount:${google_project_service_identity.eventarc_sa.email}"
 }
+
+# =============================================================================
+# Pub/Sub Service Agent (required for authenticated push to Cloud Run)
+# =============================================================================
+
+resource "google_project_service_identity" "pubsub_sa" {
+  provider = google-beta
+  project  = var.project_id
+  service  = "pubsub.googleapis.com"
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_member" "pubsub_token_creator" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountTokenCreator"
+  member  = "serviceAccount:${google_project_service_identity.pubsub_sa.email}"
+}

@@ -49,10 +49,22 @@ data "external" "fetch_source" {
     set -e
     TAG=$(git ls-remote --tags --sort=-v:refname "${var.source_git_url}" "v*" | head -1 | sed 's|.*refs/tags/||')
     [ -z "$TAG" ] && echo '{"error":"no tags"}' >&2 && exit 1
+
     DIR="${path.module}/.terraform/git-source"
     rm -rf "$DIR" && git clone -q --depth 1 --branch "$TAG" "${var.source_git_url}" "$DIR"
     COMMIT=$(git -C "$DIR" rev-parse --short HEAD)
-    echo "{\"tag\":\"$TAG\",\"commit\":\"$COMMIT\"}"
+
+    # Build the zip with the correct structure for Cloud Functions
+    ZIP="${path.module}/.terraform/function-source.zip"
+    STAGING="${path.module}/.terraform/staging"
+    rm -rf "$STAGING" && mkdir -p "$STAGING/secret_gitlab_trigger"
+    cp "$DIR/main.py" "$STAGING/main.py"
+    cp "$DIR/src/secret_gitlab_trigger/__init__.py" "$STAGING/secret_gitlab_trigger/__init__.py"
+    cp "$DIR/requirements.txt" "$STAGING/requirements.txt"
+    rm -f "$ZIP" && (cd "$STAGING" && zip -q -r "$ZIP" .)
+    rm -rf "$STAGING"
+
+    echo "{\"tag\":\"$TAG\",\"commit\":\"$COMMIT\",\"zip\":\"$ZIP\"}"
   EOF
   ]
 }
@@ -89,28 +101,6 @@ locals {
 # Function Source - From Git Repository
 # =============================================================================
 
-data "archive_file" "function_source" {
-  type        = "zip"
-  output_path = "${path.module}/.terraform/function-source.zip"
-
-  source {
-    content  = file("${path.module}/.terraform/git-source/main.py")
-    filename = "main.py"
-  }
-
-  source {
-    content  = file("${path.module}/.terraform/git-source/src/secret_gitlab_trigger/__init__.py")
-    filename = "secret_gitlab_trigger/__init__.py"
-  }
-
-  source {
-    content  = file("${path.module}/.terraform/git-source/requirements.txt")
-    filename = "requirements.txt"
-  }
-
-  depends_on = [data.external.fetch_source]
-}
-
 resource "google_storage_bucket" "function_source" {
   project  = var.project_id
   name     = "${var.project_id}-${var.function_name}-source"
@@ -138,7 +128,7 @@ resource "google_storage_bucket" "function_source" {
 resource "google_storage_bucket_object" "function_source" {
   name   = "function-source-${local.source_git_tag}.zip"
   bucket = google_storage_bucket.function_source.name
-  source = data.archive_file.function_source.output_path
+  source = data.external.fetch_source.result.zip
 }
 
 # =============================================================================
